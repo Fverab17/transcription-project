@@ -20,7 +20,7 @@ doc.add_heading('Transcription', 0)
 doc.add_paragraph(transcript_text)
 
 # Save the document to a file
-doc.save(r"C:\Users\frank\Documents\PythonProjects\transcribe\outputs\transcription_output2.docx")  # Specify the output path for the Word document
+doc.save(r"C:\Users\frank\Documents\PythonProjects\transcribe\outputs\transcription_output3.docx")  # Specify the output path for the Word document
 
-print("Transcription saved to Word document successfully!")
+print("Transcription saved to Word document successfully using git!!!")
 
