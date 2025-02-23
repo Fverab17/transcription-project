@@ -41,4 +41,4 @@ doc.add_paragraph(transcript_text)
 # 🔹 Save the document to a file
 doc.save(str(OUTPUT_FILE))
 
-print(f"✅ Transcription saved successfully at: {OUTPUT_FILE}")	
+print(f"✅ Transcription saved saved saved successfully at: {OUTPUT_FILE}")	
