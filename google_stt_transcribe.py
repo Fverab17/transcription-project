@@ -1,80 +1,119 @@
-import requests
-import json
 import os
-from google.auth import default
-from google.auth.transport.requests import Request
-from docx import Document
+import sys
+import shutil
+import subprocess
+import logging
+import json
 
-# 🔹 Set output folder (Downloads)
-OUTPUT_FOLDER = "/storage/emulated/0/Download/"
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# 🔹 Authenticate with Google Cloud using Application Default Credentials (ADC) and specify the required scope
-try:
-    # Define the required scope
-    required_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-    
-    # Obtain the default credentials and project
-    credentials, project = default(scopes=required_scopes)
-    
-    # Refresh the credentials to obtain a valid access token
-    credentials.refresh(Request())
-    access_token = credentials.token
-except Exception as e:
-    print(f"❌ ERROR: Failed to authenticate with Google Cloud: {e}")
-    exit(1)
+def convert_to_wav(input_path, output_path):
+    """Convert an audio file to WAV format using ffmpeg."""
+    try:
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+        
+        # FFmpeg command to convert audio to WAV
+        cmd = ["ffmpeg", "-y", "-i", input_path, output_path]
+        logging.info(f"Converting '{input_path}' to WAV format...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
 
-# 🔹 Prompt user to select an audio file
-audio_path = input("📂 Enter the full path to the audio file: ").strip()
+        if result.returncode != 0:
+            logging.error(f"FFmpeg conversion failed: {result.stderr}")
+            return False
 
-# 🔹 Verify if the audio file exists
-if not os.path.exists(audio_path):
-    print(f"❌ ERROR: Audio file not found at: {audio_path}")
-    exit(1)
+        logging.info(f"Successfully converted to '{output_path}'.")
+        return True
+    except Exception as e:
+        logging.exception(f"Error during audio conversion: {e}")
+        return False
 
-# 🔹 Read the audio file content
-try:
-    with open(audio_path, "rb") as f:
-        audio_content = f.read()
-except Exception as e:
-    print(f"❌ ERROR: Could not read the audio file: {e}")
-    exit(1)
+def upload_to_gcs(local_path, gcs_uri):
+    """Upload a file to Google Cloud Storage using gsutil."""
+    try:
+        if not os.path.isfile(local_path):
+            raise FileNotFoundError(f"File to upload not found: {local_path}")
 
-# 🔹 Prepare the API request
-url = "https://speech.googleapis.com/v1/speech:recognize"
-headers = {
-    "Authorization": f"Bearer {access_token}",
-    "Content-Type": "application/json"
-}
-data = {
-    "config": {
-        "encoding": "LINEAR16",  # Adjust this based on your audio file's encoding
-        "sampleRateHertz": 16000,  # Adjust this based on your audio file's sample rate
-        "languageCode": "en-US"
-    },
-    "audio": {"content": audio_content.decode("ISO-8859-1")}
-}
+        cmd = ["gsutil", "cp", local_path, gcs_uri]
+        logging.info(f"Uploading '{local_path}' to '{gcs_uri}'...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
 
-# 🔹 Send the request and handle the response
-try:
-    response = requests.post(url, headers=headers, json=data)
-    result = response.json()
+        if result.returncode != 0:
+            logging.error(f"GCS upload failed: {result.stderr}")
+            return False
 
-    if "results" in result:
-        transcript = "\n".join([res["alternatives"][0]["transcript"] for res in result["results"]])
-        print("\n✅ Transcription:\n", transcript)
+        logging.info("Upload to GCS successful.")
+        return True
+    except Exception as e:
+        logging.exception(f"Error during file upload: {e}")
+        return False
 
-        # 🔹 Generate output filename based on the audio file
-        audio_filename = os.path.basename(audio_path).rsplit(".", 1)[0]  # Remove extension
-        output_file_path = os.path.join(OUTPUT_FOLDER, f"{audio_filename}_transcription.docx")
+def transcribe_audio(gcs_uri, language_code="en-US"):
+    """Transcribe an audio file in GCS using Google STT via gcloud CLI."""
+    try:
+        # Run the long-running recognition command
+        cmd = [
+            "gcloud", "ml", "speech", "recognize-long-running", gcs_uri,
+            "--language-code", language_code, "--format", "json"
+        ]
+        logging.info(f"Transcribing audio at '{gcs_uri}' with language code '{language_code}'...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
 
-        # 🔹 Save transcription to DOCX
-        doc = Document()
-        doc.add_heading("Transcription", level=1)
-        doc.add_paragraph(transcript)
-        doc.save(output_file_path)
+        if result.returncode != 0:
+            logging.error(f"Transcription failed: {result.stderr}")
+            return None
 
-        print(f"\n✅ Transcription saved as: {output_file_path}")
-    else:
-        print("⚠️ No transcription found. Response:", result)
-except Exception as e:
-    print(f"❌ ERROR: Failed to process the API request: {e}")
+        # Parse the JSON response
+        response_data = json.loads(result.stdout)
+        transcript_text = "\n".join(
+            [res["alternatives"][0]["transcript"] for res in response_data.get("results", [])]
+        )
+
+        logging.info("Transcription completed successfully.")
+        return transcript_text
+    except Exception as e:
+        logging.exception(f"Error during transcription: {e}")
+        return None
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 google_stt_transcribe.py <input_audio.m4a> [language_code]")
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    lang = sys.argv[2] if len(sys.argv) > 2 else "en-US"
+
+    # Define output file paths
+    base_name = os.path.splitext(os.path.basename(input_file))[0].replace(" ", "_")
+    wav_file = os.path.join("/storage/emulated/0/Download", base_name + ".wav")
+
+    # Determine Downloads directory
+    downloads_dir = os.path.expanduser("~/storage/downloads")
+    if not os.path.isdir(downloads_dir):
+        downloads_dir = os.path.expanduser("~/Downloads")
+
+    output_txt = os.path.join(downloads_dir, base_name + ".txt")
+    gcs_path = f"gs://bucketfv/{base_name}.wav"
+
+    # Step 1: Convert M4A to WAV
+    if not convert_to_wav(input_file, wav_file):
+        sys.exit(1)
+
+    # Step 2: Upload WAV to Google Cloud Storage
+    if not upload_to_gcs(wav_file, gcs_path):
+        sys.exit(1)
+
+    # Step 3: Transcribe the audio
+    transcript_text = transcribe_audio(gcs_path, language_code=lang)
+    if transcript_text is None:
+        sys.exit(1)
+
+    # Step 4: Save transcription to a text file in Downloads
+    try:
+        with open(output_txt, "w", encoding="utf-8") as f:
+            f.write(transcript_text + "\n")
+        logging.info(f"Transcription saved to: {output_txt}")
+    except Exception as e:
+        logging.exception(f"Failed to save transcription to file: {e}")
+        sys.exit(1)
