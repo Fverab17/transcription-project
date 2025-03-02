@@ -8,6 +8,16 @@ import json
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+# Detect OS
+IS_ANDROID = "ANDROID_ROOT" in os.environ  # Detects if running on Android (Termux)
+
+# Set correct directories based on OS
+if IS_ANDROID:
+    DOWNLOADS_DIR = "/storage/emulated/0/Download"
+else:
+    DOWNLOADS_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
+
+
 def convert_to_wav(input_path, output_path):
     """Convert an audio file to WAV format using ffmpeg."""
     try:
@@ -15,7 +25,8 @@ def convert_to_wav(input_path, output_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
         
         # FFmpeg command to convert audio to WAV
-        cmd = ["ffmpeg", "-y", "-i", input_path, output_path]
+        cmd = ["ffmpeg", "-y", "-i", input_path,"-ac", "1", output_path]
+
         logging.info(f"Converting '{input_path}' to WAV format...")
         result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -29,13 +40,14 @@ def convert_to_wav(input_path, output_path):
         logging.exception(f"Error during audio conversion: {e}")
         return False
 
+
 def upload_to_gcs(local_path, gcs_uri):
     """Upload a file to Google Cloud Storage using gsutil."""
     try:
         if not os.path.isfile(local_path):
             raise FileNotFoundError(f"File to upload not found: {local_path}")
 
-        cmd = ["gsutil", "cp", local_path, gcs_uri]
+        cmd = ["gsutil.cmd" if os.name == "nt" else "gsutil", "cp", local_path, gcs_uri]
         logging.info(f"Uploading '{local_path}' to '{gcs_uri}'...")
         result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -49,14 +61,13 @@ def upload_to_gcs(local_path, gcs_uri):
         logging.exception(f"Error during file upload: {e}")
         return False
 
+
 def transcribe_audio(gcs_uri, language_code="en-US"):
     """Transcribe an audio file in GCS using Google STT via gcloud CLI."""
     try:
         # Run the long-running recognition command
-        cmd = [
-            "gcloud", "ml", "speech", "recognize-long-running", gcs_uri,
-            "--language-code", language_code, "--format", "json"
-        ]
+        cmd = ["gcloud.cmd" if os.name == "nt" else "gcloud", "ml", "speech", "recognize-long-running", gcs_uri, "--language-code", language_code, "--format", "json"]
+
         logging.info(f"Transcribing audio at '{gcs_uri}' with language code '{language_code}'...")
         result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -76,6 +87,7 @@ def transcribe_audio(gcs_uri, language_code="en-US"):
         logging.exception(f"Error during transcription: {e}")
         return None
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 google_stt_transcribe.py <input_audio.m4a> [language_code]")
@@ -86,17 +98,11 @@ if __name__ == "__main__":
 
     # Define output file paths
     base_name = os.path.splitext(os.path.basename(input_file))[0].replace(" ", "_")
-    wav_file = os.path.join("/storage/emulated/0/Download", base_name + ".wav")
-
-    # Determine Downloads directory
-    downloads_dir = os.path.expanduser("~/storage/downloads")
-    if not os.path.isdir(downloads_dir):
-        downloads_dir = os.path.expanduser("~/Downloads")
-
-    output_txt = os.path.join(downloads_dir, base_name + ".txt")
+    wav_file = os.path.join(DOWNLOADS_DIR, base_name + ".wav")
+    output_txt = os.path.join(DOWNLOADS_DIR, base_name + ".txt")
     gcs_path = f"gs://bucketfv/{base_name}.wav"
 
-    # Step 1: Convert M4A to WAV
+    # Step 1: Convert MP4 to WAV
     if not convert_to_wav(input_file, wav_file):
         sys.exit(1)
 
@@ -109,7 +115,7 @@ if __name__ == "__main__":
     if transcript_text is None:
         sys.exit(1)
 
-    # Step 4: Save transcription to a text file in Downloads
+    # Step 4: Save transcription to a text file
     try:
         with open(output_txt, "w", encoding="utf-8") as f:
             f.write(transcript_text + "\n")
@@ -117,3 +123,5 @@ if __name__ == "__main__":
     except Exception as e:
         logging.exception(f"Failed to save transcription to file: {e}")
         sys.exit(1)
+#run this code like: 
+# PS C:\Users\frank\Documents\PythonProjects\transcription-project> python google_stt_transcribe.py "C:\Users\frank\Documents\PythonProjects\transcribe\testaudio-input.mp4"
